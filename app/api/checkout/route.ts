@@ -2,9 +2,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { getShop } from '../../../lib/db';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-06-24.dahlia',
-});
+function getStripe() {
+  const apiKey = process.env.STRIPE_SECRET_KEY || 'sk_test_placeholder';
+  return new Stripe(apiKey, {
+    apiVersion: '2026-06-24.dahlia',
+  });
+}
 
 interface CheckoutRequestItem {
   id: number;
@@ -13,6 +16,11 @@ interface CheckoutRequestItem {
 
 export async function POST(req: NextRequest) {
   try {
+    if (!process.env.STRIPE_SECRET_KEY) {
+      return NextResponse.json({ error: 'Stripe is not configured. Please set STRIPE_SECRET_KEY.' }, { status: 500 });
+    }
+
+    const stripe = getStripe();
     const body = await req.json();
     const cartItems: CheckoutRequestItem[] = body.cartItems;
 
