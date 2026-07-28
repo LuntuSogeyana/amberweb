@@ -5,7 +5,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Plus, Trash2, Edit2, LogOut, Grid, ShoppingBag, 
   Layers, DollarSign, X, Check,
-  AlertCircle, LayoutDashboard
+  AlertCircle, LayoutDashboard, Users, Shield, Key, UserCheck, Lock
 } from 'lucide-react';
 import { 
   logoutAction, 
@@ -14,21 +14,48 @@ import {
   deletePortfolioAction,
   addShopAction,
   editShopAction,
-  deleteShopAction
+  deleteShopAction,
+  createUserAction,
+  editUserAction,
+  deleteUserAction
 } from '../app/actions/admin';
-import type { PortfolioItem, ShopItem } from '../lib/db';
+import { 
+  ALL_PERMISSIONS, 
+  ROLE_PRESETS,
+  type PortfolioItem, 
+  type ShopItem, 
+  type User, 
+  type AdminPermission, 
+  type AdminRole 
+} from '../lib/types';
 
 interface AdminDashboardProps {
+  currentUser: Omit<User, 'passwordHash'>;
   initialPortfolio: PortfolioItem[];
   initialShop: ShopItem[];
+  initialUsers: Omit<User, 'passwordHash'>[];
 }
 
-export default function AdminDashboard({ initialPortfolio, initialShop }: AdminDashboardProps) {
-  const [activeTab, setActiveTab] = useState<'stats' | 'portfolio' | 'shop'>('stats');
+export default function AdminDashboard({ 
+  currentUser, 
+  initialPortfolio, 
+  initialShop,
+  initialUsers 
+}: AdminDashboardProps) {
+  const [activeTab, setActiveTab] = useState<'stats' | 'portfolio' | 'shop' | 'users'>('stats');
+  
+  // Data States
   const [portfolioList, setPortfolioList] = useState<PortfolioItem[]>(initialPortfolio);
   const [shopList, setShopList] = useState<ShopItem[]>(initialShop);
-  
-  // Modals / Form States
+  const [userList, setUserList] = useState<Omit<User, 'passwordHash'>[]>(initialUsers);
+
+  // Helper permission check
+  const hasPermission = (perm: AdminPermission) => {
+    if (currentUser.role === 'super_admin') return true;
+    return currentUser.permissions && currentUser.permissions.includes(perm);
+  };
+
+  // Modals / Form States - Portfolio & Shop
   const [isAddingPortfolio, setIsAddingPortfolio] = useState(false);
   const [isAddingShop, setIsAddingShop] = useState(false);
   const [editingPortfolio, setEditingPortfolio] = useState<PortfolioItem | null>(null);
@@ -45,6 +72,23 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
   const [shopImage, setShopImage] = useState('');
   const [shopSize, setShopSize] = useState('A4');
 
+  // Modals / Form States - Users
+  const [isAddingUser, setIsAddingUser] = useState(false);
+  const [editingUser, setEditingUser] = useState<Omit<User, 'passwordHash'> | null>(null);
+
+  // Form Fields - Users
+  const [newUsername, setNewUsername] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [newName, setNewName] = useState('');
+  const [newRole, setNewRole] = useState<AdminRole>('editor');
+  const [newPermissions, setNewPermissions] = useState<AdminPermission[]>(ROLE_PRESETS.editor);
+
+  // Edit User Form Fields
+  const [editName, setEditName] = useState('');
+  const [editRole, setEditRole] = useState<AdminRole>('editor');
+  const [editPermissions, setEditPermissions] = useState<AdminPermission[]>([]);
+  const [editPassword, setEditPassword] = useState('');
+
   // Async Pending State
   const [isPending, startTransition] = useTransition();
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
@@ -59,6 +103,114 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
       setErrorMsg(error);
       setTimeout(() => setErrorMsg(null), 4000);
     }
+  };
+
+  // Preset Role Change Handler for New User
+  const handleRolePresetChange = (role: AdminRole) => {
+    setNewRole(role);
+    if (role !== 'custom') {
+      setNewPermissions(ROLE_PRESETS[role]);
+    }
+  };
+
+  const toggleNewPermission = (perm: AdminPermission) => {
+    setNewRole('custom');
+    setNewPermissions(prev => 
+      prev.includes(perm) ? prev.filter(p => p !== perm) : [...prev, perm]
+    );
+  };
+
+  // Preset Role Change Handler for Edit User
+  const handleEditRolePresetChange = (role: AdminRole) => {
+    setEditRole(role);
+    if (role !== 'custom') {
+      setEditPermissions(ROLE_PRESETS[role]);
+    }
+  };
+
+  const toggleEditPermission = (perm: AdminPermission) => {
+    setEditRole('custom');
+    setEditPermissions(prev => 
+      prev.includes(perm) ? prev.filter(p => p !== perm) : [...prev, perm]
+    );
+  };
+
+  // Handlers - User Management CRUD
+  const handleCreateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg(null);
+
+    if (!newUsername || !newPassword || !newName) {
+      triggerNotification(null, 'Username, password, and name are required');
+      return;
+    }
+
+    startTransition(async () => {
+      const res = await createUserAction({
+        username: newUsername,
+        password: newPassword,
+        name: newName,
+        role: newRole,
+        permissions: newPermissions
+      });
+
+      if (res.error) {
+        triggerNotification(null, res.error);
+      } else if (res.success && res.user) {
+        setUserList(prev => [...prev, res.user as Omit<User, 'passwordHash'>]);
+        setNewUsername('');
+        setNewPassword('');
+        setNewName('');
+        setNewRole('editor');
+        setNewPermissions(ROLE_PRESETS.editor);
+        setIsAddingUser(false);
+        triggerNotification('New admin user created successfully!', null);
+      }
+    });
+  };
+
+  const openEditUserModal = (user: Omit<User, 'passwordHash'>) => {
+    setEditingUser(user);
+    setEditName(user.name);
+    setEditRole(user.role);
+    setEditPermissions(user.permissions || []);
+    setEditPassword('');
+  };
+
+  const handleUpdateUser = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingUser) return;
+
+    startTransition(async () => {
+      const res = await editUserAction(editingUser.id, {
+        name: editName,
+        role: editRole,
+        permissions: editPermissions,
+        password: editPassword.trim() !== '' ? editPassword : undefined
+      });
+
+      if (res.error) {
+        triggerNotification(null, res.error);
+      } else if (res.success && res.user) {
+        setUserList(prev => prev.map(u => u.id === editingUser.id ? (res.user as Omit<User, 'passwordHash'>) : u));
+        setEditingUser(null);
+        triggerNotification('Admin user updated successfully!', null);
+      }
+    });
+  };
+
+  const handleDeleteUser = async (id: string, username: string) => {
+    if (!confirm(`Are you sure you want to delete admin account "${username}"?`)) return;
+
+    startTransition(async () => {
+      const res = await deleteUserAction(id);
+      if (res.error) {
+        triggerNotification(null, res.error);
+      } else {
+        setUserList(prev => prev.filter(u => u.id !== id));
+        triggerNotification(`Admin account "${username}" deleted successfully!`, null);
+      }
+    });
   };
 
   // Handlers - Portfolio CRUD
@@ -194,7 +346,7 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
   };
 
   return (
-    <div className="relative space-y-8 animate-in fade-in duration-500">
+    <div className="relative space-y-8 animate-in fade-in duration-500 text-left">
       
       {/* Background Decorative Glow Orbs */}
       <div className="absolute inset-0 pointer-events-none opacity-20 z-0 overflow-hidden">
@@ -202,25 +354,56 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
         <div className="absolute bottom-10 left-10 w-[350px] h-[350px] bg-[#ff8a5b]/30 blur-3xl rounded-full" />
       </div>
 
-      {/* Top Banner / Actions */}
-      <div className="relative z-10 flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-neutral-200 dark:border-neutral-800 pb-6">
+      {/* Top Banner & Logged-In User RBAC Status */}
+      <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6 border-b border-neutral-200 dark:border-neutral-800 pb-6">
         <div>
-          <h1 className="text-4xl font-light text-neutral-850 dark:text-neutral-50 tracking-tight">
-            Control Center
-          </h1>
-          <p className="text-neutral-655 dark:text-neutral-350 text-sm mt-1 font-medium">
-            Manage your art pieces, print shop inventory, and view gallery analytics.
+          <div className="flex items-center gap-3">
+            <h1 className="text-3xl sm:text-4xl font-light text-neutral-900 dark:text-white tracking-tight">
+              Control Center
+            </h1>
+            <span className="px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300 text-xs font-bold uppercase tracking-wider flex items-center gap-1.5">
+              <Shield size={13} />
+              {currentUser.role.replace('_', ' ')}
+            </span>
+          </div>
+
+          <p className="text-neutral-600 dark:text-neutral-400 text-sm mt-1">
+            Logged in as <strong className="text-neutral-900 dark:text-white">{currentUser.name}</strong> (@{currentUser.username})
           </p>
         </div>
         
         <button
           onClick={() => startTransition(async () => { await logoutAction(); })}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-red-500/30 text-red-750 dark:text-red-400 bg-red-500/5 hover:bg-red-500/10 active:scale-95 transition-all text-sm font-semibold self-start sm:self-auto cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-neutral-900"
+          className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-red-500/30 text-red-700 dark:text-red-400 bg-red-500/5 hover:bg-red-500/10 active:scale-95 transition-all text-xs font-bold uppercase tracking-wider self-start md:self-auto cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
           aria-label="Sign out of Admin Panel"
         >
           <LogOut size={16} />
           Sign Out
         </button>
+      </div>
+
+      {/* Active Permissions Bar */}
+      <div className="relative z-10 flex flex-wrap items-center gap-2 bg-neutral-100 dark:bg-neutral-900/60 p-3 rounded-2xl border border-neutral-200/80 dark:border-neutral-800 text-xs">
+        <span className="text-neutral-500 font-semibold flex items-center gap-1 mr-2">
+          <Key size={13} />
+          Your Action Rights:
+        </span>
+        {ALL_PERMISSIONS.map(p => {
+          const active = hasPermission(p.id);
+          return (
+            <span 
+              key={p.id}
+              className={`px-2.5 py-1 rounded-md font-semibold text-[11px] flex items-center gap-1 ${
+                active 
+                  ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-400" 
+                  : "bg-neutral-200/50 dark:bg-neutral-800 text-neutral-400 dark:text-neutral-600 line-through opacity-60"
+              }`}
+            >
+              {active ? <Check size={12} /> : <Lock size={12} />}
+              {p.label}
+            </span>
+          );
+        })}
       </div>
 
       {/* Notifications Toast */}
@@ -230,11 +413,10 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 bg-neutral-950 dark:bg-white text-white dark:text-neutral-955 px-6 py-3.5 rounded-full shadow-2xl backdrop-blur-md text-sm border border-neutral-850 dark:border-neutral-100 font-semibold"
+            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 bg-neutral-950 dark:bg-white text-white dark:text-neutral-950 px-6 py-3.5 rounded-full shadow-2xl backdrop-blur-md text-sm border border-neutral-800 dark:border-neutral-200 font-semibold"
             role="status"
-            aria-live="polite"
           >
-            <Check size={16} className="text-green-500" />
+            <Check size={16} className="text-emerald-500" />
             {successMsg}
           </motion.div>
         )}
@@ -244,9 +426,8 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
             initial={{ opacity: 0, y: -20 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -20 }}
-            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 bg-red-750 text-white px-6 py-3.5 rounded-full shadow-2xl backdrop-blur-md text-sm font-semibold border border-red-650"
+            className="fixed top-24 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 bg-red-700 text-white px-6 py-3.5 rounded-full shadow-2xl backdrop-blur-md text-sm font-semibold border border-red-600"
             role="alert"
-            aria-live="assertive"
           >
             <AlertCircle size={16} />
             {errorMsg}
@@ -254,47 +435,61 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
         )}
       </AnimatePresence>
 
-      {/* Navigation Tabs Container */}
-      <div className="relative z-10 flex gap-2 bg-neutral-150 dark:bg-neutral-900/60 p-1.5 rounded-2xl border border-neutral-200/50 dark:border-neutral-800/85 max-w-md shadow-inner">
+      {/* Navigation Tabs Bar */}
+      <div className="relative z-10 flex flex-wrap gap-2 bg-neutral-200/60 dark:bg-neutral-900/60 p-1.5 rounded-2xl border border-neutral-200 dark:border-neutral-800 shadow-inner">
         <button
           onClick={() => setActiveTab('stats')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex-1 justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 dark:focus-visible:ring-indigo-400 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-neutral-900 ${
+          className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex-1 justify-center cursor-pointer ${
             activeTab === 'stats'
-              ? 'bg-white dark:bg-neutral-800 text-neutral-850 dark:text-white shadow-md'
-              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-250'
+              ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-md'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
           }`}
-          aria-selected={activeTab === 'stats'}
           role="tab"
         >
-          <LayoutDashboard size={14} />
+          <LayoutDashboard size={15} />
           Stats
         </button>
+
         <button
           onClick={() => setActiveTab('portfolio')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex-1 justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 dark:focus-visible:ring-indigo-400 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-neutral-900 ${
+          className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex-1 justify-center cursor-pointer ${
             activeTab === 'portfolio'
-              ? 'bg-white dark:bg-neutral-800 text-neutral-850 dark:text-white shadow-md'
-              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-250'
+              ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-md'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
           }`}
-          aria-selected={activeTab === 'portfolio'}
           role="tab"
         >
-          <Grid size={14} />
+          <Grid size={15} />
           Portfolio
         </button>
+
         <button
           onClick={() => setActiveTab('shop')}
-          className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex-1 justify-center cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 dark:focus-visible:ring-indigo-400 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-neutral-900 ${
+          className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex-1 justify-center cursor-pointer ${
             activeTab === 'shop'
-              ? 'bg-white dark:bg-neutral-800 text-neutral-850 dark:text-white shadow-md'
-              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-250'
+              ? 'bg-white dark:bg-neutral-800 text-neutral-900 dark:text-white shadow-md'
+              : 'text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-white'
           }`}
-          aria-selected={activeTab === 'shop'}
           role="tab"
         >
-          <ShoppingBag size={14} />
+          <ShoppingBag size={15} />
           Prints Shop
         </button>
+
+        {hasPermission('manage_users') && (
+          <button
+            onClick={() => setActiveTab('users')}
+            className={`flex items-center gap-2 px-5 py-2.5 text-xs font-bold uppercase tracking-wider rounded-xl transition-all flex-1 justify-center cursor-pointer ${
+              activeTab === 'users'
+                ? 'bg-amber-500 text-black font-extrabold shadow-md'
+                : 'text-amber-700 dark:text-amber-400 hover:text-amber-900 dark:hover:text-amber-200'
+            }`}
+            role="tab"
+          >
+            <Users size={15} />
+            User Management ({userList.length})
+          </button>
+        )}
       </div>
 
       {/* Main Tab Switch Content */}
@@ -308,63 +503,68 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -15 }}
             transition={{ duration: 0.2 }}
-            className="relative z-10 grid grid-cols-1 md:grid-cols-3 gap-6"
+            className="relative z-10 space-y-6"
           >
-            {/* Stats Card 1 */}
-            <div className="bg-white/50 dark:bg-neutral-900/50 backdrop-blur-md border border-neutral-200/60 dark:border-neutral-800/80 p-6 rounded-3xl flex items-center gap-5 shadow-sm hover:scale-[1.01] hover:shadow-md transition-all">
-              <div className="h-14 w-14 rounded-2xl bg-indigo-500/10 text-indigo-750 dark:text-indigo-450 flex items-center justify-center shrink-0">
-                <Layers size={24} />
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">Portfolio Items</p>
-                <p className="text-3xl font-light text-neutral-850 dark:text-neutral-50 mt-1">{portfolioList.length}</p>
-              </div>
-            </div>
-
-            {/* Stats Card 2 */}
-            <div className="bg-white/50 dark:bg-neutral-900/50 backdrop-blur-md border border-neutral-200/60 dark:border-neutral-800/80 p-6 rounded-3xl flex items-center gap-5 shadow-sm hover:scale-[1.01] hover:shadow-md transition-all">
-              <div className="h-14 w-14 rounded-2xl bg-amber-500/10 text-amber-700 dark:text-amber-450 flex items-center justify-center shrink-0">
-                <ShoppingBag size={24} />
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">Shop Items</p>
-                <p className="text-3xl font-light text-neutral-850 dark:text-neutral-50 mt-1">{shopList.length}</p>
-              </div>
-            </div>
-
-            {/* Stats Card 3 */}
-            <div className="bg-white/50 dark:bg-neutral-900/50 backdrop-blur-md border border-neutral-200/60 dark:border-neutral-800/80 p-6 rounded-3xl flex items-center gap-5 shadow-sm hover:scale-[1.01] hover:shadow-md transition-all">
-              <div className="h-14 w-14 rounded-2xl bg-emerald-500/10 text-emerald-700 dark:text-emerald-450 flex items-center justify-center shrink-0">
-                <DollarSign size={24} />
-              </div>
-              <div>
-                <p className="text-xs font-bold uppercase tracking-wider text-neutral-600 dark:text-neutral-400">Inventory Value</p>
-                <p className="text-3xl font-light text-neutral-850 dark:text-neutral-50 mt-1">
-                  ${shopList.reduce((sum, item) => sum + item.price, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                </p>
-              </div>
-            </div>
-
-            {/* Large Activity/Dashboard Panel */}
-            <div className="col-span-1 md:col-span-3 bg-white/50 dark:bg-neutral-900/50 backdrop-blur-md border border-neutral-200/60 dark:border-neutral-800/80 p-8 rounded-3xl space-y-6 shadow-sm">
-              <h3 className="text-xl font-semibold text-neutral-850 dark:text-neutral-50">Quick Tour & Access Info</h3>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 text-sm text-neutral-700 dark:text-neutral-350">
-                <div className="space-y-3">
-                  <h4 className="font-bold text-neutral-900 dark:text-neutral-100">How to modify values:</h4>
-                  <ul className="list-disc pl-4 space-y-2 leading-relaxed">
-                    <li>Use the tabs above to toggle between the <strong>Portfolio</strong> and <strong>Shop/Prints</strong> sections.</li>
-                    <li>Add new pieces by clicking the <span className="underline font-semibold text-indigo-700 dark:text-indigo-400">Add New</span> buttons.</li>
-                    <li>Instantly edit or delete existing rows. Deletions will request a safety confirmation.</li>
-                    <li>Changes are written server-side to <code className="bg-neutral-200/60 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-xs font-mono text-neutral-850 dark:text-neutral-200">db.json</code>.</li>
-                  </ul>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              <div className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-md border border-neutral-200/80 dark:border-neutral-800 p-6 rounded-3xl flex items-center gap-5 shadow-sm">
+                <div className="h-14 w-14 rounded-2xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                  <Layers size={24} />
                 </div>
-                <div className="space-y-3">
-                  <h4 className="font-bold text-neutral-900 dark:text-neutral-100">Security Gate:</h4>
-                  <ul className="list-disc pl-4 space-y-2 leading-relaxed">
-                    <li>This Control Center uses a cryptographically random session cookie.</li>
-                    <li>If you log out, the session is invalidated immediately on the server.</li>
-                    <li>Unauthenticated requests to <code className="bg-neutral-200/60 dark:bg-neutral-800 px-1.5 py-0.5 rounded text-xs font-mono text-neutral-850 dark:text-neutral-200">/admin-panel</code> receive a clean 404 (Not Found), hiding the route from scanners.</li>
-                  </ul>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Portfolio Items</p>
+                  <p className="text-3xl font-light text-neutral-900 dark:text-white mt-1">{portfolioList.length}</p>
+                </div>
+              </div>
+
+              <div className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-md border border-neutral-200/80 dark:border-neutral-800 p-6 rounded-3xl flex items-center gap-5 shadow-sm">
+                <div className="h-14 w-14 rounded-2xl bg-amber-500/10 text-amber-600 dark:text-amber-400 flex items-center justify-center shrink-0">
+                  <ShoppingBag size={24} />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Print Catalog</p>
+                  <p className="text-3xl font-light text-neutral-900 dark:text-white mt-1">{shopList.length}</p>
+                </div>
+              </div>
+
+              <div className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-md border border-neutral-200/80 dark:border-neutral-800 p-6 rounded-3xl flex items-center gap-5 shadow-sm">
+                <div className="h-14 w-14 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <DollarSign size={24} />
+                </div>
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-wider text-neutral-500 dark:text-neutral-400">Catalog Valuation</p>
+                  <p className="text-3xl font-light text-neutral-900 dark:text-white mt-1">
+                    ${shopList.reduce((sum, item) => sum + item.price, 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Configurable Roles Overview Card */}
+            <div className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-md border border-neutral-200/80 dark:border-neutral-800 p-8 rounded-3xl space-y-6 shadow-sm">
+              <h3 className="text-xl font-semibold text-neutral-900 dark:text-white flex items-center gap-2">
+                <UserCheck className="text-amber-500" />
+                <span>Role-Based Access Control System</span>
+              </h3>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-xs">
+                <div className="p-4 rounded-2xl bg-white/40 dark:bg-neutral-950/40 border border-neutral-200/80 dark:border-neutral-800 space-y-2">
+                  <span className="px-2 py-0.5 rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 font-bold uppercase tracking-wider">Super Admin</span>
+                  <p className="text-neutral-600 dark:text-neutral-400">Full system access: Manage users, create/edit/delete content, and view stats.</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white/40 dark:bg-neutral-950/40 border border-neutral-200/80 dark:border-neutral-800 space-y-2">
+                  <span className="px-2 py-0.5 rounded-full bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 font-bold uppercase tracking-wider">Manager</span>
+                  <p className="text-neutral-600 dark:text-neutral-400">Full content control: Create, edit, and delete artwork & shop inventory.</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white/40 dark:bg-neutral-950/40 border border-neutral-200/80 dark:border-neutral-800 space-y-2">
+                  <span className="px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold uppercase tracking-wider">Editor</span>
+                  <p className="text-neutral-600 dark:text-neutral-400">Content creator: Create and edit artwork & prints (deletion disabled).</p>
+                </div>
+
+                <div className="p-4 rounded-2xl bg-white/40 dark:bg-neutral-950/40 border border-neutral-200/80 dark:border-neutral-800 space-y-2">
+                  <span className="px-2 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold uppercase tracking-wider">Custom Admin</span>
+                  <p className="text-neutral-600 dark:text-neutral-400">Tailored permissions checkboxes assigned specifically per user.</p>
                 </div>
               </div>
             </div>
@@ -382,60 +582,48 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
             className="relative z-10 space-y-6"
           >
             <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-light text-neutral-855 dark:text-neutral-100">Portfolio Inventory</h2>
-              <button
-                onClick={() => setIsAddingPortfolio(true)}
-                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:opacity-90 transition-all text-xs font-bold uppercase tracking-wider cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 dark:focus-visible:ring-indigo-400 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-neutral-900 shadow-sm"
-                aria-haspopup="dialog"
-                aria-expanded={isAddingPortfolio}
-              >
-                <Plus size={14} /> Add Piece
-              </button>
+              <h2 className="text-2xl font-light text-neutral-900 dark:text-white">Portfolio Inventory</h2>
+              {hasPermission('create_content') && (
+                <button
+                  onClick={() => setIsAddingPortfolio(true)}
+                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-black hover:opacity-90 transition-all text-xs font-bold uppercase tracking-wider cursor-pointer shadow-sm"
+                >
+                  <Plus size={14} /> Add Piece
+                </button>
+              )}
             </div>
 
-            {/* ADD PORTFOLIO MODAL FORM */}
+            {/* ADD PORTFOLIO MODAL */}
             <AnimatePresence>
-              {isAddingPortfolio && (
+              {isAddingPortfolio && hasPermission('create_content') && (
                 <motion.div 
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-xl border border-neutral-250 dark:border-neutral-800 p-6 rounded-3xl space-y-4 shadow-lg"
-                  role="dialog"
-                  aria-labelledby="portfolio-modal-title"
+                  className="bg-white/90 dark:bg-neutral-900/90 backdrop-blur-xl border border-neutral-200 dark:border-neutral-800 p-6 rounded-3xl space-y-4 shadow-xl"
                 >
                   <div className="flex justify-between items-center pb-2 border-b border-neutral-200 dark:border-neutral-800">
-                    <h3 id="portfolio-modal-title" className="text-xs font-bold uppercase tracking-widest text-neutral-700 dark:text-neutral-300">
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-neutral-700 dark:text-neutral-300">
                       New Portfolio Piece
                     </h3>
-                    <button 
-                      onClick={() => setIsAddingPortfolio(false)} 
-                      className="text-neutral-500 hover:text-neutral-850 dark:text-neutral-400 dark:hover:text-white cursor-pointer rounded-lg p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                      aria-label="Close add form"
-                    >
+                    <button onClick={() => setIsAddingPortfolio(false)} className="text-neutral-500 hover:text-black dark:hover:text-white cursor-pointer">
                       <X size={18} />
                     </button>
                   </div>
                   <form onSubmit={handleAddPortfolio} className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    <div className="space-y-1.5">
-                      <label htmlFor="port-title-input" className="text-[10px] uppercase font-bold tracking-wider text-neutral-750 dark:text-neutral-300 pl-1">Title</label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Title</label>
                       <input
-                        id="port-title-input"
-                        type="text"
-                        required
-                        placeholder="e.g. Moonlight Shadows"
-                        value={portTitle}
-                        onChange={e => setPortTitle(e.target.value)}
-                        className="w-full bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm outline-none focus-visible:border-indigo-650 dark:focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-600/20 dark:focus-visible:ring-indigo-400/20 text-neutral-900 dark:text-neutral-100 transition-all placeholder:text-neutral-450 dark:placeholder:text-neutral-400"
+                        type="text" required placeholder="e.g. Moonlight Shadows"
+                        value={portTitle} onChange={e => setPortTitle(e.target.value)}
+                        className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
                       />
                     </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="port-category-select" className="text-[10px] uppercase font-bold tracking-wider text-neutral-750 dark:text-neutral-300 pl-1">Category</label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Category</label>
                       <select
-                        id="port-category-select"
-                        value={portCategory}
-                        onChange={e => setPortCategory(e.target.value)}
-                        className="w-full bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm outline-none focus-visible:border-indigo-650 dark:focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-600/20 dark:focus-visible:ring-indigo-400/20 text-neutral-900 dark:text-neutral-100 transition-all cursor-pointer"
+                        value={portCategory} onChange={e => setPortCategory(e.target.value)}
+                        className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white cursor-pointer"
                       >
                         <option value="Digital">Digital</option>
                         <option value="Sketches">Sketches</option>
@@ -443,223 +631,97 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
                         <option value="Oil Paint">Oil Paint</option>
                       </select>
                     </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="port-image-input" className="text-[10px] uppercase font-bold tracking-wider text-neutral-750 dark:text-neutral-300 pl-1">Image URL</label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Image URL</label>
                       <input
-                        id="port-image-input"
-                        type="text"
-                        required
-                        placeholder="https://images.unsplash.com/..."
-                        value={portImage}
-                        onChange={e => setPortImage(e.target.value)}
-                        className="w-full bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm outline-none focus-visible:border-indigo-650 dark:focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-600/20 dark:focus-visible:ring-indigo-400/20 text-neutral-900 dark:text-neutral-100 transition-all placeholder:text-neutral-450 dark:placeholder:text-neutral-400"
+                        type="text" required placeholder="https://images.unsplash.com/..."
+                        value={portImage} onChange={e => setPortImage(e.target.value)}
+                        className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
                       />
                     </div>
                     <div className="col-span-1 md:col-span-3 flex justify-end gap-2.5 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setIsAddingPortfolio(false)}
-                        className="px-4 py-2 rounded-xl text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-bold uppercase tracking-wider cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={isPending}
-                        className="px-6 py-2 rounded-xl bg-indigo-650 text-white hover:bg-indigo-700 text-xs font-bold uppercase tracking-wider disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
-                      >
-                        Save Piece
-                      </button>
+                      <button type="button" onClick={() => setIsAddingPortfolio(false)} className="px-4 py-2 rounded-xl text-neutral-600 dark:text-neutral-400 text-xs font-bold uppercase">Cancel</button>
+                      <button type="submit" disabled={isPending} className="px-6 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase">Save Piece</button>
                     </div>
                   </form>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {/* PORTFOLIO GRID/TABLE CONTAINER */}
-            <div className="bg-white/40 dark:bg-neutral-900/40 backdrop-blur-md border border-neutral-250 dark:border-neutral-800/80 rounded-3xl overflow-hidden shadow-sm">
-              
-              {/* Desktop Table View */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full border-collapse text-left" aria-label="Portfolio Items">
-                  <thead>
-                    <tr className="border-b border-neutral-250 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-neutral-900/30 text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-neutral-300">
-                      <th scope="col" className="py-4 px-6">Image</th>
-                      <th scope="col" className="py-4 px-6">Title</th>
-                      <th scope="col" className="py-4 px-6">Category</th>
-                      <th scope="col" className="py-4 px-6 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-200/50 dark:divide-neutral-800/60 text-sm text-neutral-750 dark:text-neutral-300">
-                    {portfolioList.map(item => (
-                      <tr key={item.id} className="hover:bg-neutral-50/20 dark:hover:bg-neutral-900/10 transition-colors">
-                        <td className="py-3.5 px-6">
-                          <div className="h-12 w-12 rounded-xl overflow-hidden bg-neutral-900 border border-neutral-200/10">
-                            <img src={item.image} alt="" className="object-cover h-full w-full" />
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-6 font-medium text-neutral-900 dark:text-neutral-100">
-                          {editingPortfolio?.id === item.id ? (
-                            <input
-                              type="text"
-                              aria-label="Edit title"
-                              className="bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-600 outline-none text-neutral-900 dark:text-neutral-100"
-                              value={editingPortfolio.title}
-                              onChange={e => setEditingPortfolio({ ...editingPortfolio, title: e.target.value })}
-                            />
-                          ) : (
-                            item.title
-                          )}
-                        </td>
-                        <td className="py-3.5 px-6">
-                          {editingPortfolio?.id === item.id ? (
-                            <select
-                              aria-label="Edit category"
-                              className="bg-white dark:bg-neutral-955 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-600 outline-none text-neutral-900 dark:text-neutral-100 cursor-pointer"
-                              value={editingPortfolio.category}
-                              onChange={e => setEditingPortfolio({ ...editingPortfolio, category: e.target.value })}
-                            >
-                              <option value="Digital">Digital</option>
-                              <option value="Sketches">Sketches</option>
-                              <option value="Abstract">Abstract</option>
-                              <option value="Oil Paint">Oil Paint</option>
-                            </select>
-                          ) : (
-                            <span className="px-2.5 py-1 text-xs rounded-full bg-neutral-150 dark:bg-neutral-800 text-neutral-750 dark:text-neutral-300 font-semibold border border-neutral-200/40 dark:border-neutral-700/50">
-                              {item.category}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-6 text-right">
-                          <div className="flex justify-end gap-3">
-                            {editingPortfolio?.id === item.id ? (
-                              <>
-                                <button
-                                  onClick={handleEditPortfolio}
-                                  className="text-emerald-600 hover:text-emerald-700 p-1 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                                  aria-label={`Save changes to ${item.title}`}
-                                >
-                                  <Check size={18} />
-                                </button>
-                                <button
-                                  onClick={() => setEditingPortfolio(null)}
-                                  className="text-neutral-500 hover:text-neutral-800 dark:hover:text-white p-1 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                                  aria-label={`Cancel editing ${item.title}`}
-                                >
-                                  <X size={18} />
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  onClick={() => setEditingPortfolio({ ...item })}
-                                  className="text-neutral-600 dark:text-neutral-300 hover:text-indigo-650 dark:hover:text-indigo-400 p-1.5 hover:bg-indigo-500/5 rounded-lg transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
-                                  aria-label={`Edit item: ${item.title}`}
-                                >
-                                  <Edit2 size={16} />
-                                </button>
-                                <button
-                                  onClick={() => handleDeletePortfolio(item.id)}
-                                  className="text-neutral-600 dark:text-neutral-300 hover:text-red-750 dark:hover:text-red-400 p-1.5 hover:bg-red-500/5 rounded-lg transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                                  aria-label={`Delete item: ${item.title}`}
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Mobile Card View */}
-              <div className="md:hidden divide-y divide-neutral-250 dark:divide-neutral-800/80 p-4 space-y-4">
-                {portfolioList.map(item => (
-                  <div key={item.id} className="pt-4 first:pt-0 flex flex-col gap-3">
-                    <div className="flex gap-4 items-center">
-                      <div className="h-14 w-14 rounded-xl overflow-hidden bg-neutral-900 border border-neutral-200/10 shrink-0">
-                        <img src={item.image} alt="" className="object-cover h-full w-full" />
-                      </div>
-                      <div className="flex-1 min-w-0">
+            {/* PORTFOLIO TABLE */}
+            <div className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-md border border-neutral-200 dark:border-neutral-800 rounded-3xl overflow-hidden shadow-sm">
+              <table className="w-full border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-100/50 dark:bg-neutral-900/50 text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-neutral-300">
+                    <th className="py-4 px-6">Image</th>
+                    <th className="py-4 px-6">Title</th>
+                    <th className="py-4 px-6">Category</th>
+                    <th className="py-4 px-6 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800 text-sm text-neutral-800 dark:text-neutral-200">
+                  {portfolioList.map(item => (
+                    <tr key={item.id} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/30">
+                      <td className="py-3.5 px-6">
+                        <div className="h-12 w-12 rounded-xl overflow-hidden bg-neutral-900">
+                          <img src={item.image} alt="" className="object-cover h-full w-full" />
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-6 font-medium text-neutral-900 dark:text-white">
                         {editingPortfolio?.id === item.id ? (
-                          <div className="space-y-2">
-                            <input
-                              type="text"
-                              aria-label="Edit title"
-                              className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-650 outline-none text-neutral-900 dark:text-neutral-100"
-                              value={editingPortfolio.title}
-                              onChange={e => setEditingPortfolio({ ...editingPortfolio, title: e.target.value })}
-                            />
-                            <select
-                              aria-label="Edit category"
-                              className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-650 outline-none text-neutral-900 dark:text-neutral-100 cursor-pointer"
-                              value={editingPortfolio.category}
-                              onChange={e => setEditingPortfolio({ ...editingPortfolio, category: e.target.value })}
-                            >
-                              <option value="Digital">Digital</option>
-                              <option value="Sketches">Sketches</option>
-                              <option value="Abstract">Abstract</option>
-                              <option value="Oil Paint">Oil Paint</option>
-                            </select>
-                          </div>
+                          <input
+                            type="text" className="bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1 text-sm outline-none text-neutral-900 dark:text-white"
+                            value={editingPortfolio.title} onChange={e => setEditingPortfolio({ ...editingPortfolio, title: e.target.value })}
+                          />
                         ) : (
-                          <>
-                            <h4 className="font-semibold text-neutral-850 dark:text-neutral-100 truncate">{item.title}</h4>
-                            <span className="inline-block px-2.5 py-0.5 mt-1 text-[10px] uppercase font-bold tracking-wider rounded-md bg-neutral-150 dark:bg-neutral-800 text-neutral-750 dark:text-neutral-300">
-                              {item.category}
-                            </span>
-                          </>
+                          item.title
                         )}
-                      </div>
-                    </div>
-                    
-                    {/* Actions Row */}
-                    <div className="flex justify-end gap-3 pt-2 border-t border-neutral-150 dark:border-neutral-850">
-                      {editingPortfolio?.id === item.id ? (
-                        <>
-                          <button
-                            onClick={handleEditPortfolio}
-                            className="flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-500 hover:text-emerald-700 font-semibold uppercase tracking-wider py-1 px-3 bg-emerald-500/10 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
+                      </td>
+                      <td className="py-3.5 px-6">
+                        {editingPortfolio?.id === item.id ? (
+                          <select
+                            className="bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1 text-sm outline-none text-neutral-900 dark:text-white"
+                            value={editingPortfolio.category} onChange={e => setEditingPortfolio({ ...editingPortfolio, category: e.target.value })}
                           >
-                            <Check size={14} /> Save
-                          </button>
-                          <button
-                            onClick={() => setEditingPortfolio(null)}
-                            className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-750 dark:text-neutral-400 hover:text-neutral-600 dark:hover:text-white font-semibold uppercase tracking-wider py-1 px-3 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500"
-                          >
-                            <X size={14} /> Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => setEditingPortfolio({ ...item })}
-                            className="flex items-center gap-1 text-xs text-indigo-700 dark:text-indigo-400 hover:bg-indigo-500/10 font-semibold uppercase tracking-wider py-1.5 px-3 bg-indigo-500/5 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
-                            aria-label={`Edit: ${item.title}`}
-                          >
-                            <Edit2 size={12} /> Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeletePortfolio(item.id)}
-                            className="flex items-center gap-1 text-xs text-red-700 dark:text-red-400 hover:bg-red-500/10 font-semibold uppercase tracking-wider py-1.5 px-3 bg-red-500/5 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                            aria-label={`Delete: ${item.title}`}
-                          >
-                            <Trash2 size={12} /> Delete
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                            <option value="Digital">Digital</option>
+                            <option value="Sketches">Sketches</option>
+                            <option value="Abstract">Abstract</option>
+                            <option value="Oil Paint">Oil Paint</option>
+                          </select>
+                        ) : (
+                          <span className="px-2.5 py-1 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 font-semibold">
+                            {item.category}
+                          </span>
+                        )}
+                      </td>
+                      <td className="py-3.5 px-6 text-right">
+                        <div className="flex justify-end gap-3">
+                          {editingPortfolio?.id === item.id ? (
+                            <>
+                              <button onClick={handleEditPortfolio} className="text-emerald-600 p-1"><Check size={18} /></button>
+                              <button onClick={() => setEditingPortfolio(null)} className="text-neutral-500 p-1"><X size={18} /></button>
+                            </>
+                          ) : (
+                            <>
+                              {hasPermission('edit_content') && (
+                                <button onClick={() => setEditingPortfolio({ ...item })} className="text-neutral-600 dark:text-neutral-300 hover:text-indigo-600 p-1.5"><Edit2 size={16} /></button>
+                              )}
+                              {hasPermission('delete_content') && (
+                                <button onClick={() => handleDeletePortfolio(item.id)} className="text-neutral-600 dark:text-neutral-300 hover:text-red-600 p-1.5"><Trash2 size={16} /></button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </motion.div>
         )}
 
-        {/* SHOP TAB */}
+        {/* PRINTS SHOP TAB */}
         {activeTab === 'shop' && (
           <motion.div
             key="shop-tab"
@@ -670,332 +732,475 @@ export default function AdminDashboard({ initialPortfolio, initialShop }: AdminD
             className="relative z-10 space-y-6"
           >
             <div className="flex items-center justify-between">
-              <h2 className="text-2xl font-light text-neutral-850 dark:text-neutral-105">Shop Catalog</h2>
-              <button
-                onClick={() => setIsAddingShop(true)}
-                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-neutral-900 hover:opacity-90 transition-all text-xs font-bold uppercase tracking-wider cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 dark:focus-visible:ring-indigo-400 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-neutral-900 shadow-sm"
-                aria-haspopup="dialog"
-                aria-expanded={isAddingShop}
-              >
-                <Plus size={14} /> Add Product
-              </button>
+              <h2 className="text-2xl font-light text-neutral-900 dark:text-white">Prints Shop Catalog</h2>
+              {hasPermission('create_content') && (
+                <button
+                  onClick={() => setIsAddingShop(true)}
+                  className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-neutral-900 dark:bg-white text-white dark:text-black hover:opacity-90 transition-all text-xs font-bold uppercase tracking-wider cursor-pointer shadow-sm"
+                >
+                  <Plus size={14} /> Add Product
+                </button>
+              )}
             </div>
 
-            {/* ADD SHOP MODAL FORM */}
+            {/* ADD SHOP MODAL */}
             <AnimatePresence>
-              {isAddingShop && (
+              {isAddingShop && hasPermission('create_content') && (
                 <motion.div 
                   initial={{ opacity: 0, y: -10 }}
                   animate={{ opacity: 1, y: 0 }}
                   exit={{ opacity: 0, y: -10 }}
-                  className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-xl border border-neutral-250 dark:border-neutral-800 p-6 rounded-3xl space-y-4 shadow-lg"
-                  role="dialog"
-                  aria-labelledby="shop-modal-title"
+                  className="bg-white/90 dark:bg-neutral-900/90 backdrop-blur-xl border border-neutral-200 dark:border-neutral-800 p-6 rounded-3xl space-y-4 shadow-xl"
                 >
                   <div className="flex justify-between items-center pb-2 border-b border-neutral-200 dark:border-neutral-800">
-                    <h3 id="shop-modal-title" className="text-xs font-bold uppercase tracking-widest text-neutral-700 dark:text-neutral-300">
+                    <h3 className="text-xs font-bold uppercase tracking-widest text-neutral-700 dark:text-neutral-300">
                       New Shop Product
                     </h3>
-                    <button 
-                      onClick={() => setIsAddingShop(false)} 
-                      className="text-neutral-500 hover:text-neutral-850 dark:text-neutral-400 dark:hover:text-white cursor-pointer rounded-lg p-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500"
-                      aria-label="Close add form"
-                    >
+                    <button onClick={() => setIsAddingShop(false)} className="text-neutral-500 hover:text-black dark:hover:text-white cursor-pointer">
                       <X size={18} />
                     </button>
                   </div>
                   <form onSubmit={handleAddShop} className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div className="space-y-1.5">
-                      <label htmlFor="shop-title-input" className="text-[10px] uppercase font-bold tracking-wider text-neutral-750 dark:text-neutral-300 pl-1">Title</label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Title</label>
                       <input
-                        id="shop-title-input"
-                        type="text"
-                        required
-                        placeholder="e.g. Neon Print"
-                        value={shopTitle}
-                        onChange={e => setShopTitle(e.target.value)}
-                        className="w-full bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm outline-none focus-visible:border-indigo-650 dark:focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-600/20 dark:focus-visible:ring-indigo-400/20 text-neutral-900 dark:text-neutral-100 transition-all placeholder:text-neutral-450 dark:placeholder:text-neutral-400"
+                        type="text" required placeholder="e.g. Neon Print"
+                        value={shopTitle} onChange={e => setShopTitle(e.target.value)}
+                        className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
                       />
                     </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="shop-price-input" className="text-[10px] uppercase font-bold tracking-wider text-neutral-750 dark:text-neutral-300 pl-1">Price ($)</label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Price ($)</label>
                       <input
-                        id="shop-price-input"
-                        type="number"
-                        required
-                        step="0.01"
-                        placeholder="45.00"
-                        value={shopPrice}
-                        onChange={e => setShopPrice(e.target.value)}
-                        className="w-full bg-white dark:bg-neutral-955 border border-neutral-355 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm outline-none focus-visible:border-indigo-655 dark:focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-600/20 dark:focus-visible:ring-indigo-400/20 text-neutral-900 dark:text-neutral-100 transition-all placeholder:text-neutral-450 dark:placeholder:text-neutral-400"
+                        type="number" step="0.01" required placeholder="45.00"
+                        value={shopPrice} onChange={e => setShopPrice(e.target.value)}
+                        className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
                       />
                     </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="shop-size-select" className="text-[10px] uppercase font-bold tracking-wider text-neutral-755 dark:text-neutral-300 pl-1">Size Option</label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Size</label>
                       <select
-                        id="shop-size-select"
-                        value={shopSize}
-                        onChange={e => setShopSize(e.target.value)}
-                        className="w-full bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm outline-none focus-visible:border-indigo-650 dark:focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-600/20 dark:focus-visible:ring-indigo-400/20 text-neutral-900 dark:text-neutral-100 transition-all cursor-pointer"
+                        value={shopSize} onChange={e => setShopSize(e.target.value)}
+                        className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white cursor-pointer"
                       >
                         <option value="A4">A4 Print</option>
                         <option value="A3">A3 Original</option>
                         <option value="A2">A2 Poster</option>
-                        <option value="A1">A1 Canvas</option>
                       </select>
                     </div>
-                    <div className="space-y-1.5">
-                      <label htmlFor="shop-image-input" className="text-[10px] uppercase font-bold tracking-wider text-neutral-750 dark:text-neutral-300 pl-1">Image URL</label>
+                    <div className="space-y-1">
+                      <label className="text-[10px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Image URL</label>
                       <input
-                        id="shop-image-input"
-                        type="text"
-                        required
-                        placeholder="https://images.unsplash.com/..."
-                        value={shopImage}
-                        onChange={e => setShopImage(e.target.value)}
-                        className="w-full bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-xl px-4 py-2.5 text-sm outline-none focus-visible:border-indigo-650 dark:focus-visible:border-indigo-400 focus-visible:ring-2 focus-visible:ring-indigo-600/20 dark:focus-visible:ring-indigo-400/20 text-neutral-900 dark:text-neutral-100 transition-all placeholder:text-neutral-450 dark:placeholder:text-neutral-400"
+                        type="text" required placeholder="https://images.unsplash.com/..."
+                        value={shopImage} onChange={e => setShopImage(e.target.value)}
+                        className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
                       />
                     </div>
                     <div className="col-span-1 md:col-span-4 flex justify-end gap-2.5 pt-2">
-                      <button
-                        type="button"
-                        onClick={() => setIsAddingShop(false)}
-                        className="px-4 py-2 rounded-xl text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800 text-xs font-bold uppercase tracking-wider cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500"
-                      >
-                        Cancel
-                      </button>
-                      <button
-                        type="submit"
-                        disabled={isPending}
-                        className="px-6 py-2 rounded-xl bg-indigo-650 text-white hover:bg-indigo-700 text-xs font-bold uppercase tracking-wider disabled:opacity-50 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
-                      >
-                        Save Product
-                      </button>
+                      <button type="button" onClick={() => setIsAddingShop(false)} className="px-4 py-2 rounded-xl text-neutral-600 dark:text-neutral-400 text-xs font-bold uppercase">Cancel</button>
+                      <button type="submit" disabled={isPending} className="px-6 py-2 rounded-xl bg-indigo-600 text-white text-xs font-bold uppercase">Save Product</button>
                     </div>
                   </form>
                 </motion.div>
               )}
             </AnimatePresence>
 
-            {/* SHOP GRID/TABLE CONTAINER */}
-            <div className="bg-white/40 dark:bg-neutral-900/40 backdrop-blur-md border border-neutral-250 dark:border-neutral-800/80 rounded-3xl overflow-hidden shadow-sm">
-              
-              {/* Desktop Table View */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full border-collapse text-left" aria-label="Shop Catalog Items">
-                  <thead>
-                    <tr className="border-b border-neutral-250 dark:border-neutral-800/80 bg-neutral-50/50 dark:bg-neutral-900/30 text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-neutral-300">
-                      <th scope="col" className="py-4 px-6">Image</th>
-                      <th scope="col" className="py-4 px-6">Product Title</th>
-                      <th scope="col" className="py-4 px-6">Price</th>
-                      <th scope="col" className="py-4 px-6">Size</th>
-                      <th scope="col" className="py-4 px-6 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-neutral-200/50 dark:divide-neutral-800/60 text-sm text-neutral-755 dark:text-neutral-300">
-                    {shopList.map(item => (
-                      <tr key={item.id} className="hover:bg-neutral-50/20 dark:hover:bg-neutral-900/10 transition-colors">
-                        <td className="py-3.5 px-6">
-                          <div className="h-12 w-12 rounded-xl overflow-hidden bg-neutral-900 border border-neutral-200/10">
-                            <img src={item.image} alt="" className="object-cover h-full w-full" />
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-6 font-medium text-neutral-900 dark:text-neutral-100">
-                          {editingShop?.id === item.id ? (
-                            <input
-                              type="text"
-                              aria-label="Edit title"
-                              className="bg-white dark:bg-neutral-950 border border-neutral-350 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-650 outline-none text-neutral-900 dark:text-neutral-100"
-                              value={editingShop.title}
-                              onChange={e => setEditingShop({ ...editingShop, title: e.target.value })}
-                            />
-                          ) : (
-                            item.title
-                          )}
-                        </td>
-                        <td className="py-3.5 px-6 font-medium text-neutral-900 dark:text-neutral-100">
-                          {editingShop?.id === item.id ? (
-                            <div className="relative max-w-[100px]">
-                              <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500 text-xs font-bold">$</span>
-                              <input
-                                type="number"
-                                step="0.01"
-                                aria-label="Edit price"
-                                className="w-full bg-white dark:bg-neutral-950 border border-neutral-355 dark:border-neutral-800 rounded-md pl-6 pr-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-650 outline-none text-neutral-900 dark:text-neutral-100"
-                                value={editingShop.price}
-                                onChange={e => setEditingShop({ ...editingShop, price: Number(e.target.value) })}
-                              />
-                            </div>
-                          ) : (
-                            <span className="font-bold text-neutral-800 dark:text-neutral-200">${item.price.toFixed(2)}</span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-6 text-neutral-850 dark:text-neutral-105">
-                          {editingShop?.id === item.id ? (
-                            <select
-                              aria-label="Edit size"
-                              className="bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-650 outline-none text-neutral-900 dark:text-neutral-100 cursor-pointer"
-                              value={editingShop.size || 'A4'}
-                              onChange={e => setEditingShop({ ...editingShop, size: e.target.value })}
-                            >
-                              <option value="A4">A4</option>
-                              <option value="A3">A3</option>
-                              <option value="A2">A2</option>
-                              <option value="A1">A1</option>
-                            </select>
-                          ) : (
-                            <span className="px-2 py-0.5 text-xs border border-neutral-300 dark:border-neutral-700 rounded-md font-semibold text-neutral-700 dark:text-neutral-350">
-                              {item.size || 'A4'}
-                            </span>
-                          )}
-                        </td>
-                        <td className="py-3.5 px-6 text-right">
-                          <div className="flex justify-end gap-3">
-                            {editingShop?.id === item.id ? (
-                              <>
-                                <button
-                                  onClick={handleEditShop}
-                                  className="text-emerald-600 hover:text-emerald-700 p-1 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                                  aria-label={`Save changes to product ${item.title}`}
-                                >
-                                  <Check size={18} />
-                                </button>
-                                <button
-                                  onClick={() => setEditingShop(null)}
-                                  className="text-neutral-500 hover:text-neutral-800 dark:hover:text-white p-1 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500"
-                                  aria-label={`Cancel editing product ${item.title}`}
-                                >
-                                  <X size={18} />
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  onClick={() => setEditingShop({ ...item })}
-                                  className="text-neutral-600 dark:text-neutral-300 hover:text-indigo-655 dark:hover:text-indigo-400 p-1.5 hover:bg-indigo-500/5 rounded-lg transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
-                                  aria-label={`Edit item: ${item.title}`}
-                                >
-                                  <Edit2 size={16} />
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteShop(item.id)}
-                                  className="text-neutral-600 dark:text-neutral-300 hover:text-red-755 dark:hover:text-red-400 p-1.5 hover:bg-red-500/5 rounded-lg transition-all cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                                  aria-label={`Delete item: ${item.title}`}
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Mobile Card View */}
-              <div className="md:hidden divide-y divide-neutral-250 dark:divide-neutral-800 p-4 space-y-4">
-                {shopList.map(item => (
-                  <div key={item.id} className="pt-4 first:pt-0 flex flex-col gap-3">
-                    <div className="flex gap-4 items-center">
-                      <div className="h-14 w-14 rounded-xl overflow-hidden bg-neutral-900 border border-neutral-200/10 shrink-0">
-                        <img src={item.image} alt="" className="object-cover h-full w-full" />
-                      </div>
-                      <div className="flex-1 min-w-0">
+            {/* SHOP TABLE */}
+            <div className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-md border border-neutral-200 dark:border-neutral-800 rounded-3xl overflow-hidden shadow-sm">
+              <table className="w-full border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-100/50 dark:bg-neutral-900/50 text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-neutral-300">
+                    <th className="py-4 px-6">Image</th>
+                    <th className="py-4 px-6">Title</th>
+                    <th className="py-4 px-6">Size</th>
+                    <th className="py-4 px-6">Price</th>
+                    <th className="py-4 px-6 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800 text-sm text-neutral-800 dark:text-neutral-200">
+                  {shopList.map(item => (
+                    <tr key={item.id} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/30">
+                      <td className="py-3.5 px-6">
+                        <div className="h-12 w-12 rounded-xl overflow-hidden bg-neutral-900">
+                          <img src={item.image} alt="" className="object-cover h-full w-full" />
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-6 font-medium text-neutral-900 dark:text-white">
                         {editingShop?.id === item.id ? (
-                          <div className="space-y-2">
-                            <input
-                              type="text"
-                              aria-label="Edit title"
-                              className="w-full bg-white dark:bg-neutral-955 border border-neutral-350 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-650 outline-none text-neutral-900 dark:text-neutral-100"
-                              value={editingShop.title}
-                              onChange={e => setEditingShop({ ...editingShop, title: e.target.value })}
-                            />
-                            <div className="flex gap-2">
-                              <div className="relative flex-1">
-                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-neutral-500 text-xs">$</span>
-                                <input
-                                  type="number"
-                                  step="0.01"
-                                  aria-label="Edit price"
-                                  className="w-full bg-white dark:bg-neutral-955 border border-neutral-355 dark:border-neutral-800 rounded-md pl-6 pr-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-655 outline-none text-neutral-900 dark:text-neutral-100"
-                                  value={editingShop.price}
-                                  onChange={e => setEditingShop({ ...editingShop, price: Number(e.target.value) })}
-                                />
-                              </div>
-                              <select
-                                aria-label="Edit size"
-                                className="bg-white dark:bg-neutral-955 border border-neutral-355 dark:border-neutral-800 rounded-md px-2 py-1.5 text-sm focus-visible:ring-2 focus-visible:ring-indigo-655 outline-none text-neutral-900 dark:text-neutral-100 cursor-pointer"
-                                value={editingShop.size || 'A4'}
-                                onChange={e => setEditingShop({ ...editingShop, size: e.target.value })}
-                              >
-                                <option value="A4">A4</option>
-                                <option value="A3">A3</option>
-                                <option value="A2">A2</option>
-                                <option value="A1">A1</option>
-                              </select>
-                            </div>
-                          </div>
+                          <input
+                            type="text" className="bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1 text-sm outline-none text-neutral-900 dark:text-white"
+                            value={editingShop.title} onChange={e => setEditingShop({ ...editingShop, title: e.target.value })}
+                          />
                         ) : (
-                          <>
-                            <h4 className="font-semibold text-neutral-850 dark:text-neutral-100 truncate">{item.title}</h4>
-                            <div className="flex gap-2 items-center mt-1">
-                              <span className="font-bold text-neutral-800 dark:text-neutral-200 text-sm">
-                                ${item.price.toFixed(2)}
-                              </span>
-                              <span className="px-2 py-0.5 text-[10px] border border-neutral-350 dark:border-neutral-700 rounded-md font-semibold text-neutral-600 dark:text-neutral-450">
-                                {item.size || 'A4'}
-                              </span>
-                            </div>
-                          </>
+                          item.title
                         )}
-                      </div>
-                    </div>
-
-                    {/* Actions Row */}
-                    <div className="flex justify-end gap-3 pt-2 border-t border-neutral-150 dark:border-neutral-850">
-                      {editingShop?.id === item.id ? (
-                        <>
-                          <button
-                            onClick={handleEditShop}
-                            className="flex items-center gap-1 text-xs text-emerald-650 dark:text-emerald-500 hover:text-emerald-700 font-semibold uppercase tracking-wider py-1 px-3 bg-emerald-500/10 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
-                          >
-                            <Check size={14} /> Save
-                          </button>
-                          <button
-                            onClick={() => setEditingShop(null)}
-                            className="flex items-center gap-1 text-xs text-neutral-500 hover:text-neutral-750 dark:text-neutral-400 hover:text-neutral-600 dark:hover:text-white font-semibold uppercase tracking-wider py-1 px-3 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-neutral-500"
-                          >
-                            <X size={14} /> Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            onClick={() => setEditingShop({ ...item })}
-                            className="flex items-center gap-1 text-xs text-indigo-700 dark:text-indigo-400 hover:bg-indigo-500/10 font-semibold uppercase tracking-wider py-1.5 px-3 bg-indigo-500/5 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600"
-                            aria-label={`Edit: ${item.title}`}
-                          >
-                            <Edit2 size={12} /> Edit
-                          </button>
-                          <button
-                            onClick={() => handleDeleteShop(item.id)}
-                            className="flex items-center gap-1 text-xs text-red-750 dark:text-red-400 hover:bg-red-500/10 font-semibold uppercase tracking-wider py-1.5 px-3 bg-red-500/5 rounded-lg cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500"
-                            aria-label={`Delete: ${item.title}`}
-                          >
-                            <Trash2 size={12} /> Delete
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
+                      </td>
+                      <td className="py-3.5 px-6">
+                        <span className="px-2.5 py-1 text-xs rounded-full bg-neutral-100 dark:bg-neutral-800 font-semibold">
+                          {item.size || 'A4'}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-6 font-semibold text-neutral-900 dark:text-white">
+                        {editingShop?.id === item.id ? (
+                          <input
+                            type="number" step="0.01" className="bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-md px-2 py-1 text-sm outline-none text-neutral-900 dark:text-white w-24"
+                            value={editingShop.price} onChange={e => setEditingShop({ ...editingShop, price: parseFloat(e.target.value) || 0 })}
+                          />
+                        ) : (
+                          `$${item.price.toFixed(2)}`
+                        )}
+                      </td>
+                      <td className="py-3.5 px-6 text-right">
+                        <div className="flex justify-end gap-3">
+                          {editingShop?.id === item.id ? (
+                            <>
+                              <button onClick={handleEditShop} className="text-emerald-600 p-1"><Check size={18} /></button>
+                              <button onClick={() => setEditingShop(null)} className="text-neutral-500 p-1"><X size={18} /></button>
+                            </>
+                          ) : (
+                            <>
+                              {hasPermission('edit_content') && (
+                                <button onClick={() => setEditingShop({ ...item })} className="text-neutral-600 dark:text-neutral-300 hover:text-indigo-600 p-1.5"><Edit2 size={16} /></button>
+                              )}
+                              {hasPermission('delete_content') && (
+                                <button onClick={() => handleDeleteShop(item.id)} className="text-neutral-600 dark:text-neutral-300 hover:text-red-600 p-1.5"><Trash2 size={16} /></button>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
           </motion.div>
         )}
+
+        {/* USER MANAGEMENT TAB (RBAC Scoped) */}
+        {activeTab === 'users' && hasPermission('manage_users') && (
+          <motion.div
+            key="users-tab"
+            initial={{ opacity: 0, y: 15 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -15 }}
+            transition={{ duration: 0.2 }}
+            className="relative z-10 space-y-6"
+          >
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-2xl font-light text-neutral-900 dark:text-white">Admin Users & Configurable Roles</h2>
+                <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">Create accounts, set role presets, or manually configure granular action permissions.</p>
+              </div>
+
+              <button
+                onClick={() => setIsAddingUser(true)}
+                className="flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-amber-500 text-black font-extrabold hover:bg-amber-400 transition-all text-xs uppercase tracking-wider cursor-pointer shadow-sm"
+              >
+                <Plus size={15} /> Create Admin Account
+              </button>
+            </div>
+
+            {/* CREATE NEW ADMIN USER MODAL */}
+            <AnimatePresence>
+              {isAddingUser && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="bg-white/95 dark:bg-neutral-900/95 backdrop-blur-xl border border-neutral-200 dark:border-neutral-800 p-6 rounded-3xl space-y-6 shadow-2xl"
+                >
+                  <div className="flex justify-between items-center pb-3 border-b border-neutral-200 dark:border-neutral-800">
+                    <h3 className="text-sm font-bold uppercase tracking-widest text-neutral-900 dark:text-white flex items-center gap-2">
+                      <Users size={16} className="text-amber-500" />
+                      <span>Create New Admin Account</span>
+                    </h3>
+                    <button onClick={() => setIsAddingUser(false)} className="text-neutral-500 hover:text-black dark:hover:text-white cursor-pointer">
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleCreateUser} className="space-y-6">
+                    {/* User Info Fields */}
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Username</label>
+                        <input
+                          type="text" required placeholder="e.g. sarah_editor"
+                          value={newUsername} onChange={e => setNewUsername(e.target.value)}
+                          className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Full Name</label>
+                        <input
+                          type="text" required placeholder="e.g. Sarah Jenkins"
+                          value={newName} onChange={e => setNewName(e.target.value)}
+                          className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Password</label>
+                        <input
+                          type="password" required placeholder="••••••••"
+                          value={newPassword} onChange={e => setNewPassword(e.target.value)}
+                          className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Role Preset Selector */}
+                    <div className="space-y-2">
+                      <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Role Preset</label>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        {(['super_admin', 'manager', 'editor', 'viewer', 'custom'] as AdminRole[]).map(role => (
+                          <button
+                            key={role} type="button"
+                            onClick={() => handleRolePresetChange(role)}
+                            className={`py-2 px-3 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
+                              newRole === role 
+                                ? "bg-amber-500 text-black border-amber-500 shadow-sm" 
+                                : "bg-neutral-100 dark:bg-neutral-950 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-800 hover:border-amber-500"
+                            }`}
+                          >
+                            {role.replace('_', ' ')}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Configurable Granular Permissions Checkboxes */}
+                    <div className="space-y-3 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+                      <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300 flex items-center justify-between">
+                        <span>Configurable Granular Permissions</span>
+                        <span className="text-[10px] text-amber-600 dark:text-amber-400 font-normal">Check or uncheck individual rights below</span>
+                      </label>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {ALL_PERMISSIONS.map(perm => {
+                          const checked = newPermissions.includes(perm.id);
+                          return (
+                            <label 
+                              key={perm.id} 
+                              onClick={() => toggleNewPermission(perm.id)}
+                              className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                                checked 
+                                  ? "bg-amber-500/10 border-amber-500/40 text-neutral-900 dark:text-white" 
+                                  : "bg-neutral-50 dark:bg-neutral-950/50 border-neutral-200 dark:border-neutral-800 text-neutral-500"
+                              }`}
+                            >
+                              <input 
+                                type="checkbox" checked={checked} onChange={() => {}} 
+                                className="mt-0.5 rounded accent-amber-500 cursor-pointer" 
+                              />
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-xs block">{perm.label}</span>
+                                <span className="text-[11px] opacity-80 block">{perm.description}</span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-2">
+                      <button type="button" onClick={() => setIsAddingUser(false)} className="px-5 py-2.5 rounded-xl text-neutral-600 dark:text-neutral-400 text-xs font-bold uppercase">Cancel</button>
+                      <button type="submit" disabled={isPending} className="px-6 py-2.5 rounded-xl bg-amber-500 text-black text-xs font-extrabold uppercase shadow-md">Create Account</button>
+                    </div>
+                  </form>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* EDIT ADMIN USER MODAL */}
+            <AnimatePresence>
+              {editingUser && (
+                <motion.div 
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="bg-white/95 dark:bg-neutral-900/95 backdrop-blur-xl border border-neutral-200 dark:border-neutral-800 p-6 rounded-3xl space-y-6 shadow-2xl"
+                >
+                  <div className="flex justify-between items-center pb-3 border-b border-neutral-200 dark:border-neutral-800">
+                    <h3 className="text-sm font-bold uppercase tracking-widest text-neutral-900 dark:text-white flex items-center gap-2">
+                      <Edit2 size={16} className="text-amber-500" />
+                      <span>Edit Account & Permissions (@{editingUser.username})</span>
+                    </h3>
+                    <button onClick={() => setEditingUser(null)} className="text-neutral-500 hover:text-black dark:hover:text-white cursor-pointer">
+                      <X size={18} />
+                    </button>
+                  </div>
+
+                  <form onSubmit={handleUpdateUser} className="space-y-6">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div className="space-y-1">
+                        <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Full Name</label>
+                        <input
+                          type="text" required
+                          value={editName} onChange={e => setEditName(e.target.value)}
+                          className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
+                        />
+                      </div>
+
+                      <div className="space-y-1">
+                        <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Reset Password (Optional)</label>
+                        <input
+                          type="password" placeholder="Leave blank to keep current"
+                          value={editPassword} onChange={e => setEditPassword(e.target.value)}
+                          className="w-full bg-white dark:bg-neutral-950 border border-neutral-300 dark:border-neutral-800 rounded-xl px-4 py-2 text-sm outline-none text-neutral-900 dark:text-white"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Role Presets for Edit */}
+                    <div className="space-y-2">
+                      <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">Role Preset</label>
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+                        {(['super_admin', 'manager', 'editor', 'viewer', 'custom'] as AdminRole[]).map(role => (
+                          <button
+                            key={role} type="button"
+                            onClick={() => handleEditRolePresetChange(role)}
+                            className={`py-2 px-3 rounded-xl text-xs font-bold uppercase tracking-wider border transition-all cursor-pointer ${
+                              editRole === role 
+                                ? "bg-amber-500 text-black border-amber-500 shadow-sm" 
+                                : "bg-neutral-100 dark:bg-neutral-950 text-neutral-700 dark:text-neutral-300 border-neutral-200 dark:border-neutral-800 hover:border-amber-500"
+                            }`}
+                          >
+                            {role.replace('_', ' ')}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    {/* Configurable Permissions for Edit */}
+                    <div className="space-y-3 pt-2 border-t border-neutral-200 dark:border-neutral-800">
+                      <label className="text-[11px] uppercase font-bold tracking-wider text-neutral-700 dark:text-neutral-300">
+                        Assigned Action Permissions
+                      </label>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {ALL_PERMISSIONS.map(perm => {
+                          const checked = editPermissions.includes(perm.id);
+                          return (
+                            <label 
+                              key={perm.id} 
+                              onClick={() => toggleEditPermission(perm.id)}
+                              className={`p-3 rounded-xl border flex items-start gap-3 cursor-pointer transition-all ${
+                                checked 
+                                  ? "bg-amber-500/10 border-amber-500/40 text-neutral-900 dark:text-white" 
+                                  : "bg-neutral-50 dark:bg-neutral-950/50 border-neutral-200 dark:border-neutral-800 text-neutral-500"
+                              }`}
+                            >
+                              <input 
+                                type="checkbox" checked={checked} onChange={() => {}} 
+                                className="mt-0.5 rounded accent-amber-500 cursor-pointer" 
+                              />
+                              <div className="space-y-0.5">
+                                <span className="font-bold text-xs block">{perm.label}</span>
+                                <span className="text-[11px] opacity-80 block">{perm.description}</span>
+                              </div>
+                            </label>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div className="flex justify-end gap-3 pt-2">
+                      <button type="button" onClick={() => setEditingUser(null)} className="px-5 py-2.5 rounded-xl text-neutral-600 dark:text-neutral-400 text-xs font-bold uppercase">Cancel</button>
+                      <button type="submit" disabled={isPending} className="px-6 py-2.5 rounded-xl bg-amber-500 text-black text-xs font-extrabold uppercase shadow-md">Update User Rights</button>
+                    </div>
+                  </form>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
+            {/* USERS TABLE */}
+            <div className="bg-white/60 dark:bg-neutral-900/60 backdrop-blur-md border border-neutral-200 dark:border-neutral-800 rounded-3xl overflow-hidden shadow-sm">
+              <table className="w-full border-collapse text-left">
+                <thead>
+                  <tr className="border-b border-neutral-200 dark:border-neutral-800 bg-neutral-100/50 dark:bg-neutral-900/50 text-xs font-bold uppercase tracking-wider text-neutral-700 dark:text-neutral-300">
+                    <th className="py-4 px-6">User / Account</th>
+                    <th className="py-4 px-6">Role</th>
+                    <th className="py-4 px-6">Configured Action Permissions</th>
+                    <th className="py-4 px-6 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800 text-sm text-neutral-800 dark:text-neutral-200">
+                  {userList.map(user => (
+                    <tr key={user.id} className="hover:bg-neutral-50/50 dark:hover:bg-neutral-800/30">
+                      <td className="py-4 px-6">
+                        <div className="flex items-center gap-3">
+                          <div className="h-10 w-10 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-400 font-extrabold flex items-center justify-center text-sm">
+                            {user.name.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <p className="font-bold text-neutral-900 dark:text-white leading-none">{user.name}</p>
+                            <p className="text-xs text-neutral-500 dark:text-neutral-400 mt-1">@{user.username}</p>
+                          </div>
+                        </div>
+                      </td>
+
+                      <td className="py-4 px-6">
+                        <span className={`px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wider ${
+                          user.role === 'super_admin'
+                            ? "bg-purple-500/10 border border-purple-500/20 text-purple-700 dark:text-purple-300"
+                            : user.role === 'manager'
+                            ? "bg-indigo-500/10 border border-indigo-500/20 text-indigo-700 dark:text-indigo-300"
+                            : user.role === 'editor'
+                            ? "bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 dark:text-emerald-300"
+                            : "bg-amber-500/10 border border-amber-500/20 text-amber-700 dark:text-amber-300"
+                        }`}>
+                          {user.role.replace('_', ' ')}
+                        </span>
+                      </td>
+
+                      <td className="py-4 px-6">
+                        <div className="flex flex-wrap gap-1.5 max-w-md">
+                          {user.role === 'super_admin' ? (
+                            <span className="text-xs font-semibold text-purple-600 dark:text-purple-400">✦ All Permissions (Super Admin)</span>
+                          ) : user.permissions && user.permissions.length > 0 ? (
+                            user.permissions.map(p => (
+                              <span key={p} className="px-2 py-0.5 rounded bg-neutral-200/60 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 text-[10px] font-bold">
+                                {p.replace('_', ' ')}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-neutral-400 italic">No action permissions assigned</span>
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-4 px-6 text-right">
+                        <div className="flex justify-end gap-2">
+                          <button
+                            onClick={() => openEditUserModal(user)}
+                            className="flex items-center gap-1 text-xs text-indigo-700 dark:text-indigo-400 hover:bg-indigo-500/10 font-bold uppercase py-1.5 px-3 rounded-lg transition-all"
+                          >
+                            <Edit2 size={13} /> Edit
+                          </button>
+                          
+                          {currentUser.id !== user.id && (
+                            <button
+                              onClick={() => handleDeleteUser(user.id, user.username)}
+                              className="flex items-center gap-1 text-xs text-red-700 dark:text-red-400 hover:bg-red-500/10 font-bold uppercase py-1.5 px-3 rounded-lg transition-all"
+                            >
+                              <Trash2 size={13} /> Delete
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </motion.div>
+        )}
+
       </AnimatePresence>
+
     </div>
   );
 }
