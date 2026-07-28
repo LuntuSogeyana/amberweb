@@ -1,11 +1,11 @@
 "use client";
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useCart } from '../../../context/CartContext';
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react';
 import Link from 'next/link';
 
-export default function CheckoutSuccess() {
+function SuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get('session_id');
   const { clearCart } = useCart();
@@ -71,5 +71,18 @@ export default function CheckoutSuccess() {
         </>
       )}
     </div>
+  );
+}
+
+export default function CheckoutSuccess() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-[60vh] flex flex-col items-center justify-center space-y-6 text-center">
+        <Loader2 size={40} className="animate-spin text-neutral-400" />
+        <h2 className="text-2xl font-light text-neutral-500 dark:text-neutral-400">Confirming your payment…</h2>
+      </div>
+    }>
+      <SuccessContent />
+    </Suspense>
   );
 }
